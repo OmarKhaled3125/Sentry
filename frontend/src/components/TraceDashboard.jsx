@@ -9,7 +9,6 @@ const DEFAULT_LAYER_METADATA = {
   core: { label: 'Core & Utilities', description: 'Shared Helpers & System Libraries' },
 };
 
-// Generic System File Classifier
 const classifyFileCategory = (file) => {
   if (file.category) return file.category;
   const path = (file.path || file.id || '').toLowerCase();
@@ -30,7 +29,6 @@ const classifyFileCategory = (file) => {
   return 'core';
 };
 
-// Universal Collision-Free Column Layout Generator
 const buildGlobalArchitectureGraph = (rawFiles = [], externalEdges = [], customLayers = []) => {
   const nodes = [];
   const edges = [];
@@ -89,9 +87,6 @@ const buildGlobalArchitectureGraph = (rawFiles = [], externalEdges = [], customL
   const FIRST_CARD_Y = 150;
   const CARD_VERTICAL_GAP = 80;
 
-  // ... other code unchanged ...
-
-
   columns.forEach((col, colIdx) => {
     const colX = START_X + colIdx * COLUMN_X_SPACING;
     const sectionId = `sec-${col.key}`;
@@ -149,10 +144,13 @@ const buildGlobalArchitectureGraph = (rawFiles = [], externalEdges = [], customL
 
 const TraceDashboard = () => {
   const [spans, setSpans] = useState([]);
-  const [selectedTraceId, setSelectedTraceId] = useState(null);
+  const [discoveredProcesses, setDiscoveredProcesses] = useState([]);
+  const [selectedProcessId, setSelectedProcessId] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [viewMode, setViewMode] = useState('architecture');
   const [darkMode, setDarkMode] = useState(true);
+  const [processSearchQuery, setProcessSearchQuery] = useState('');
+  const [collapsedCategories, setCollapsedCategories] = useState({});
 
   // Project state
   const [currentProjectPath, setCurrentProjectPath] = useState('');
@@ -173,19 +171,16 @@ const TraceDashboard = () => {
     setIsScanning(true);
     setScanError(null);
 
-    const archUrl = targetPath
-      ? `http://127.0.0.1:5000/api/architecture?path=${encodeURIComponent(targetPath)}`
-      : 'http://127.0.0.1:5000/api/architecture';
-
-    const tracesUrl = targetPath
-      ? `http://127.0.0.1:5000/api/traces?path=${encodeURIComponent(targetPath)}`
-      : 'http://127.0.0.1:5000/api/traces';
+    const archUrl = targetPath ? `http://127.0.0.1:5000/api/architecture?path=${encodeURIComponent(targetPath)}` : 'http://127.0.0.1:5000/api/architecture';
+    const tracesUrl = targetPath ? `http://127.0.0.1:5000/api/traces?path=${encodeURIComponent(targetPath)}` : 'http://127.0.0.1:5000/api/traces';
+    const procsUrl = targetPath ? `http://127.0.0.1:5000/api/processes?path=${encodeURIComponent(targetPath)}` : 'http://127.0.0.1:5000/api/processes';
 
     Promise.all([
       fetch(archUrl).then((r) => r.json()),
       fetch(tracesUrl).then((r) => r.json()),
+      fetch(procsUrl).then((r) => r.json()),
     ])
-      .then(([archRes, tracesRes]) => {
+      .then(([archRes, tracesRes, procsRes]) => {
         setIsScanning(false);
         if (archRes.error) {
           setScanError(archRes.error);
@@ -205,13 +200,14 @@ const TraceDashboard = () => {
         setArchitectureNodes(layout.nodes);
         setArchitectureEdges(layout.edges);
 
-        // Update spans for this project
-        const projectSpans = tracesRes.spans || (Array.isArray(tracesRes) ? tracesRes : []);
+        const procs = procsRes.processes || [];
+        setDiscoveredProcesses(procs);
+
+        const projectSpans = tracesRes.spans || [];
         setSpans(projectSpans);
-        if (projectSpans.length > 0) {
-          setSelectedTraceId(projectSpans[0].trace_id);
-        } else {
-          setSelectedTraceId(null);
+
+        if (procs.length > 0) {
+          setSelectedProcessId(procs[0].process_id);
         }
       })
       .catch((err) => {
@@ -224,7 +220,6 @@ const TraceDashboard = () => {
     fetchProject('');
   }, []);
 
-  // Native OS directory browse handler
   const handleBrowseDirectory = () => {
     setIsScanning(true);
     fetch('http://127.0.0.1:5000/api/browse-directory', { method: 'POST' })
@@ -256,25 +251,26 @@ const TraceDashboard = () => {
     }
   };
 
-  const handleRunSimulation = () => {
+  const handleRunProcessSimulation = (targetProcId = null) => {
     setIsSimulating(true);
+    const payload = { path: currentProjectPath };
+    if (targetProcId) {
+      payload.process_id = targetProcId;
+    }
+
     fetch('http://127.0.0.1:5000/api/traces/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: currentProjectPath }),
+      body: JSON.stringify(payload),
     })
       .then((res) => res.json())
-      .then((data) => {
+      .then(() => {
         setIsSimulating(false);
-        // Refresh traces
-        fetch(`http://127.0.0.1:5000/api/traces?path=${encodeURIComponent(currentProjectPath)}`)
+        const tracesUrl = `http://127.0.0.1:5000/api/traces?path=${encodeURIComponent(currentProjectPath)}`;
+        fetch(tracesUrl)
           .then((r) => r.json())
           .then((tracesRes) => {
-            const projectSpans = tracesRes.spans || (Array.isArray(tracesRes) ? tracesRes : []);
-            setSpans(projectSpans);
-            if (data.spans && data.spans.length > 0) {
-              setSelectedTraceId(data.spans[0].trace_id);
-            }
+            setSpans(tracesRes.spans || []);
           });
       })
       .catch((err) => {
@@ -299,31 +295,110 @@ const TraceDashboard = () => {
         const name = (f.name || f.label || '').toLowerCase();
         const path = (f.path || '').toLowerCase();
         const summary = (f.summary || '').toLowerCase();
-        const routes = (f.routes || []).some((r) => r.toLowerCase().includes(q));
-        const functions = (f.functions || []).some((fn) => fn.toLowerCase().includes(q));
-        const classes = (f.classes || []).some((c) => c.name.toLowerCase().includes(q));
-        return name.includes(q) || path.includes(q) || summary.includes(q) || routes || functions || classes;
+        return name.includes(q) || path.includes(q) || summary.includes(q);
       });
     }
 
     return buildGlobalArchitectureGraph(files, archData.cross_edges || [], archData.layers || []);
   }, [archData, selectedArchCategory, archSearchQuery]);
 
-  const traces = [...new Set(spans.map((s) => s.trace_id))];
-  const activeSpans = spans.filter((s) => s.trace_id === selectedTraceId).sort((a, b) => (a.start_time || 0) - (b.start_time || 0));
+  // Group spans into structured processes
+  const processGroups = useMemo(() => {
+    const map = new Map();
 
-  const stepStatus = activeSpans.map((s) => {
-    const cleanName = s.name.replace(/^step_\d+_/, '').replace(/_/g, ' ');
-    const duration = s.end_time && s.start_time ? Math.max((s.end_time - s.start_time) / 1e6, 0) : 0;
-    return {
-      id: s.span_id,
-      name: cleanName,
-      fullName: s.name,
-      status: s.status_code || 'OK',
-      duration,
-      description: s.status_description,
-    };
-  });
+    spans.forEach((span) => {
+      let attr = {};
+      try {
+        attr = typeof span.attributes === 'string' ? JSON.parse(span.attributes) : (span.attributes || {});
+      } catch (e) {
+        attr = {};
+      }
+
+      const procId = span.process_id || attr.process_id || 'default_proc';
+
+      if (!map.has(procId)) {
+        map.set(procId, {
+          processId: procId,
+          traceId: span.trace_id,
+          rootSpan: null,
+          spans: [],
+        });
+      }
+
+      const group = map.get(procId);
+      group.spans.push({ ...span, parsedAttributes: attr });
+
+      if (!span.parent_span_id) {
+        group.rootSpan = { ...span, parsedAttributes: attr };
+      }
+    });
+
+    return Array.from(map.values()).map((group) => {
+      const rootAttr = group.rootSpan?.parsedAttributes || {};
+      const processName = rootAttr.process_name || group.rootSpan?.name || group.processId;
+      const childSpans = group.spans
+        .filter((s) => s.parent_span_id !== null)
+        .sort((a, b) => (a.start_time || 0) - (b.start_time || 0));
+
+      const steps = childSpans.map((s, idx) => {
+        const cleanName = s.name.replace(/^step_\d+_/, '').replace(/_/g, ' ');
+        const duration = s.end_time && s.start_time ? Math.max((s.end_time - s.start_time) / 1e6, 0) : 0;
+        return {
+          id: s.span_id,
+          stepNumber: idx + 1,
+          name: cleanName,
+          fullName: s.name,
+          status: s.status_code || 'OK',
+          duration,
+          description: s.status_description,
+          attributes: s.parsedAttributes,
+          sourceFile: s.parsedAttributes?.source_file || 'main.py',
+          span: s,
+        };
+      });
+
+      const isError = group.spans.some((s) => s.status_code === 'ERROR');
+
+      return {
+        processId: group.processId,
+        traceId: group.traceId,
+        processName,
+        category: rootAttr.category || 'core',
+        status: isError ? 'FAILED' : 'COMPLETED',
+        totalSteps: steps.length,
+        steps,
+        spans: group.spans,
+      };
+    });
+  }, [spans]);
+
+  const activeProcess = useMemo(() => {
+    return processGroups.find((p) => p.processId === selectedProcessId) || processGroups[0] || null;
+  }, [processGroups, selectedProcessId]);
+
+  // Group sidebar process items by category
+  const categorizedSidebarProcesses = useMemo(() => {
+    let procs = discoveredProcesses.length > 0 ? discoveredProcesses : processGroups.map(p => ({
+      process_id: p.processId,
+      process_name: p.processName,
+      category: p.category,
+      total_steps: p.totalSteps
+    }));
+
+    if (processSearchQuery.trim()) {
+      const q = processSearchQuery.toLowerCase();
+      procs = procs.filter(p => p.process_name.toLowerCase().includes(q) || p.process_id.toLowerCase().includes(q));
+    }
+
+    const categories = {};
+    procs.forEach((p) => {
+      const cat = p.category || 'core';
+      if (!categories[cat]) categories[cat] = [];
+      categories[cat].push(p);
+    });
+
+    return categories;
+  }, [discoveredProcesses, processGroups, processSearchQuery]);
 
   const availableCategories = useMemo(() => {
     const rawCategories = [...new Set((archData.files || []).map((f) => f.category || classifyFileCategory(f)))];
@@ -335,21 +410,20 @@ const TraceDashboard = () => {
     });
   }, [archData]);
 
-  const handleInspectInArchitecture = (spanName) => {
+  const handleInspectInArchitecture = (sourceFile) => {
     setViewMode('architecture');
-    const matchedFile = archData.files.find((f) => {
-      const inFunctions = (f.functions || []).some((fn) => spanName.includes(fn) || fn.includes(spanName));
-      const inName = spanName.toLowerCase().includes(f.name.toLowerCase().replace(/\.[^/.]+$/, ''));
-      return inFunctions || inName;
-    });
+    const matchedFile = archData.files.find((f) => f.name === sourceFile || f.path.includes(sourceFile));
     if (matchedFile) {
       setInspectedNode(matchedFile);
     }
   };
 
+  const toggleCategoryCollapse = (cat) => {
+    setCollapsedCategories(prev => ({ ...prev, [cat]: !prev[cat] }));
+  };
+
   return (
     <div className={`${darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'} min-h-screen font-sans p-6 flex flex-col gap-5 transition-colors duration-200`}>
-      {/* Hidden HTML5 folder fallback input */}
       <input
         type="file"
         ref={directoryInputRef}
@@ -379,10 +453,9 @@ const TraceDashboard = () => {
               FF
             </div>
             <div>
-              <div className="flex items-center gap-2.5">
-                <h1 className={`text-base font-extrabold tracking-tight ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>TRACE FAILURE FORENSICS & PIPELINE ARCHITECTURES</h1>
-                {/* Project Header */}
-              </div>
+              <h1 className={`text-base font-extrabold tracking-tight ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+                TRACE FAILURE FORENSICS & PIPELINE ARCHITECTURES
+              </h1>
               <p className={`text-xs mt-0.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
                 {currentProjectPath || 'Root Workspace'}
               </p>
@@ -390,7 +463,6 @@ const TraceDashboard = () => {
           </div>
         </div>
 
-        {/* View Mode Switcher */}
         <div className={`border rounded-xl p-1 flex gap-1 shadow-sm ${darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-300'}`}>
           <button
             onClick={() => setViewMode('architecture')}
@@ -414,7 +486,6 @@ const TraceDashboard = () => {
           </button>
         </div>
 
-        {/* Theme Toggle Button */}
         <button
           onClick={() => setDarkMode((v) => !v)}
           className={`px-3.5 py-1.5 rounded-xl border text-xs font-mono font-bold tracking-wider transition-all ${
@@ -425,14 +496,11 @@ const TraceDashboard = () => {
         </button>
       </header>
 
-      {/* Main Content Areas */}
       {viewMode === 'architecture' ? (
         <div className="flex flex-col gap-4 flex-1">
-          {/* Architecture Toolbar */}
           <div className={`p-4 rounded-2xl border shadow-sm flex flex-wrap items-center justify-between gap-4 ${
             darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-300'
           }`}>
-            {/* Custom Project Scanner Input + Browse Button */}
             <div className="flex items-center gap-2 flex-1 min-w-[340px] max-w-xl">
               <button
                 onClick={handleBrowseDirectory}
@@ -445,7 +513,7 @@ const TraceDashboard = () => {
               </button>
               <input
                 type="text"
-                placeholder="Enter project folder path (e.g. . or d:/MyProject)..."
+                placeholder="Enter project folder path..."
                 value={customPathInput}
                 onChange={(e) => setCustomPathInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && fetchProject(customPathInput)}
@@ -462,7 +530,6 @@ const TraceDashboard = () => {
               </button>
             </div>
 
-            {/* Dynamic Layer Filter Pills */}
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className={`text-[10px] font-bold font-mono uppercase tracking-wider mr-1 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
                 LAYER:
@@ -471,12 +538,8 @@ const TraceDashboard = () => {
                 onClick={() => setSelectedArchCategory('all')}
                 className={`px-3 py-1.5 rounded-xl text-xs font-mono font-semibold uppercase transition-all border ${
                   selectedArchCategory === 'all'
-                    ? darkMode
-                      ? 'bg-sky-950 text-sky-300 border-sky-600 shadow-sm'
-                      : 'bg-sky-100 text-sky-900 border-sky-400 shadow-sm'
-                    : darkMode
-                    ? 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                    : 'bg-slate-50 border-slate-300 text-slate-700 hover:text-slate-900'
+                    ? darkMode ? 'bg-sky-950 text-sky-300 border-sky-600 shadow-sm' : 'bg-sky-100 text-sky-900 border-sky-400 shadow-sm'
+                    : darkMode ? 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-700 hover:text-slate-900'
                 }`}
               >
                 ALL
@@ -487,51 +550,16 @@ const TraceDashboard = () => {
                   onClick={() => setSelectedArchCategory(tab.key)}
                   className={`px-3 py-1.5 rounded-xl text-xs font-mono font-semibold uppercase transition-all border ${
                     selectedArchCategory === tab.key
-                      ? darkMode
-                        ? 'bg-sky-950 text-sky-300 border-sky-600 shadow-sm'
-                        : 'bg-sky-100 text-sky-900 border-sky-400 shadow-sm'
-                      : darkMode
-                      ? 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                      : 'bg-slate-50 border-slate-300 text-slate-700 hover:text-slate-900'
+                      ? darkMode ? 'bg-sky-950 text-sky-300 border-sky-600 shadow-sm' : 'bg-sky-100 text-sky-900 border-sky-400 shadow-sm'
+                      : darkMode ? 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-700 hover:text-slate-900'
                   }`}
                 >
                   {tab.label}
                 </button>
               ))}
             </div>
-
-            {/* Search Input */}
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="Search symbols..."
-                  value={archSearchQuery}
-                  onChange={(e) => setArchSearchQuery(e.target.value)}
-                  className={`w-48 px-3 py-1.5 text-xs rounded-xl border font-mono transition-all focus:outline-none focus:ring-2 focus:ring-sky-500 ${
-                    darkMode ? 'bg-slate-950 border-slate-800 text-slate-200 placeholder-slate-500' : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400'
-                  }`}
-                />
-                {archSearchQuery && (
-                  <button
-                    onClick={() => setArchSearchQuery('')}
-                    className="absolute right-2.5 top-1.5 text-xs text-slate-400 hover:text-slate-200"
-                  >
-                    CLEAR
-                  </button>
-                )}
-              </div>
-            </div>
           </div>
 
-          {scanError && (
-            <div className="p-3 rounded-xl bg-red-950/40 border border-red-800 text-red-300 text-xs font-mono flex items-center justify-between">
-              <span>SCANNER ERROR: {scanError}</span>
-              <button onClick={() => setScanError(null)} className="text-red-400 hover:text-red-200">CLOSE</button>
-            </div>
-          )}
-
-          {/* Architecture Canvas + Node Inspector Drawer */}
           <div className="flex gap-4 flex-1 items-start relative">
             <div className="flex-1">
               <ArchitecturePanel
@@ -542,330 +570,286 @@ const TraceDashboard = () => {
                 selectedNodeId={inspectedNode?.id}
               />
             </div>
-
-            {/* Node Inspector Drawer */}
-            {inspectedNode && (
-              <div
-                className={`w-96 rounded-2xl border shadow-xl p-5 flex flex-col gap-4 animate-in slide-in-from-right duration-200 ${
-                  darkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-300 text-slate-900'
-                }`}
-              >
-                <div className={`flex items-center justify-between border-b pb-3 ${darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
-                  <div>
-                    <h3 className={`font-bold text-sm font-mono truncate w-64 ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
-                      {inspectedNode.name}
-                    </h3>
-                    <p className={`text-[10px] font-mono truncate mt-0.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                      {inspectedNode.path}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setInspectedNode(null)}
-                    className="text-xs font-mono font-bold px-2 py-1 rounded border border-slate-300 dark:border-slate-700 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
-                  >
-                    CLOSE
-                  </button>
-                </div>
-
-                {inspectedNode.summary && (
-                  <div>
-                    <div className={`text-[10px] uppercase font-bold tracking-wider mb-1 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                      Description
-                    </div>
-                    <p className={`text-xs leading-relaxed p-2.5 rounded-xl border ${
-                      darkMode ? 'bg-slate-950/60 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-300 text-slate-800'
-                    }`}>
-                      {inspectedNode.summary}
-                    </p>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className={`p-2.5 rounded-xl border ${
-                    darkMode ? 'bg-slate-950/50 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-300 text-slate-800'
-                  }`}>
-                    <div className={`text-[10px] uppercase font-bold ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>Layer</div>
-                    <div className="font-mono font-bold uppercase mt-0.5 text-sky-600 dark:text-sky-400">{inspectedNode.category}</div>
-                  </div>
-                  <div className={`p-2.5 rounded-xl border ${
-                    darkMode ? 'bg-slate-950/50 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-300 text-slate-800'
-                  }`}>
-                    <div className={`text-[10px] uppercase font-bold ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>Size</div>
-                    <div className="font-mono font-bold mt-0.5">{inspectedNode.lines || '—'} lines</div>
-                  </div>
-                </div>
-
-                {inspectedNode.routes && inspectedNode.routes.length > 0 && (
-                  <div>
-                    <div className={`text-[10px] uppercase font-bold tracking-wider mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                      Exposed Endpoints
-                    </div>
-                    <div className="space-y-1">
-                      {inspectedNode.routes.map((r, i) => (
-                        <div key={i} className={`text-xs font-mono p-2 rounded-lg border font-semibold ${
-                          darkMode ? 'bg-indigo-950/40 border-indigo-800 text-indigo-300' : 'bg-indigo-50 border-indigo-300 text-indigo-900'
-                        }`}>
-                          {r}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {inspectedNode.classes && inspectedNode.classes.length > 0 && (
-                  <div>
-                    <div className={`text-[10px] uppercase font-bold tracking-wider mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                      Classes & Methods
-                    </div>
-                    <div className="space-y-1.5">
-                      {inspectedNode.classes.map((cls, i) => (
-                        <div key={i} className={`p-2 rounded-lg border font-mono text-xs ${
-                          darkMode ? 'bg-purple-950/30 border-purple-800/60' : 'bg-purple-50 border-purple-200'
-                        }`}>
-                          <div className={`font-bold ${darkMode ? 'text-purple-300' : 'text-purple-900'}`}>class {cls.name}</div>
-                          {cls.methods && cls.methods.length > 0 && (
-                            <div className={`text-[11px] mt-1 pl-2 border-l ${darkMode ? 'text-slate-400 border-slate-700' : 'text-slate-600 border-slate-300'}`}>
-                              {cls.methods.map((m) => `${m}()`).join(', ')}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {inspectedNode.functions && inspectedNode.functions.length > 0 && (
-                  <div>
-                    <div className={`text-[10px] uppercase font-bold tracking-wider mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                      Functions ({inspectedNode.functions.length})
-                    </div>
-                    <div className="flex flex-wrap gap-1 max-h-36 overflow-y-auto p-1">
-                      {inspectedNode.functions.map((fn, i) => (
-                        <span key={i} className={`text-[11px] font-mono px-2 py-0.5 rounded-md border ${
-                          darkMode ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300' : 'bg-emerald-50 border-emerald-300 text-emerald-900'
-                        }`}>
-                          {fn}()
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {inspectedNode.imports && inspectedNode.imports.length > 0 && (
-                  <div>
-                    <div className={`text-[10px] uppercase font-bold tracking-wider mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                      Dependencies ({inspectedNode.imports.length})
-                    </div>
-                    <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto p-1">
-                      {inspectedNode.imports.map((imp, i) => (
-                        <span key={i} className={`text-[10px] font-mono px-2 py-0.5 rounded-md border ${
-                          darkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-slate-100 border-slate-300 text-slate-800'
-                        }`}>
-                          {imp}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
       ) : (
         /* Execution Forensics View */
         <div className="flex gap-6 flex-1 items-start">
-          {/* Execution Vault Sidebar */}
-          <aside className={`${sidebarCollapsed ? 'w-12' : 'w-72'} transition-all duration-300 flex-shrink-0`}>
+          {/* Multi-Process Collapsible Sidebar */}
+          <aside className={`${sidebarCollapsed ? 'w-12' : 'w-80'} transition-all duration-300 flex-shrink-0`}>
             <div className={`h-full p-4 rounded-2xl border shadow-sm ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-300'}`}>
               {!sidebarCollapsed && (
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <h2 className={`text-xs tracking-widest uppercase font-bold ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                      EXECUTION VAULT
+                      DISCOVERED PROCESSES
                     </h2>
                     <span className={`text-[10px] font-mono px-2 py-0.5 rounded border font-bold ${
                       darkMode ? 'bg-sky-500/10 text-sky-400 border-sky-500/20' : 'bg-sky-100 text-sky-900 border-sky-300'
                     }`}>
-                      {traces.length} TRACES
+                      {discoveredProcesses.length || processGroups.length} ENTRY POINTS
                     </span>
                   </div>
-                  <div className="flex flex-col gap-2 max-h-[72vh] overflow-y-auto pr-1">
-                    {traces.map((traceId) => {
-                      const traceSpans = spans.filter((s) => s.trace_id === traceId);
-                      const isError = traceSpans.some((s) => s.status_code === 'ERROR');
-                      return (
+
+                  {/* Search Filter Bar */}
+                  <input
+                    type="text"
+                    placeholder="Filter processes..."
+                    value={processSearchQuery}
+                    onChange={(e) => setProcessSearchQuery(e.target.value)}
+                    className={`w-full px-3 py-1.5 text-xs rounded-xl border font-mono mb-3 transition-all focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+                      darkMode ? 'bg-slate-950 border-slate-800 text-slate-200 placeholder-slate-500' : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400'
+                    }`}
+                  />
+
+                  {/* Grouped Process List */}
+                  <div className="flex flex-col gap-3 max-h-[68vh] overflow-y-auto pr-1">
+                    {Object.entries(categorizedSidebarProcesses).map(([category, procList]) => (
+                      <div key={category} className="rounded-xl border border-slate-800/40 p-2">
                         <button
-                          key={traceId}
-                          onClick={() => setSelectedTraceId(traceId)}
-                          className={`text-left p-3 rounded-xl border transition-all duration-200 w-full text-xs shadow-sm ${
-                            selectedTraceId === traceId
-                              ? darkMode
-                                ? 'bg-sky-950/60 text-sky-200 border-sky-600 shadow-md'
-                                : 'bg-sky-50 text-sky-950 border-sky-400 font-bold shadow-sm'
-                              : darkMode
-                              ? 'bg-slate-950/60 border-slate-800/80 text-slate-300 hover:bg-slate-800'
-                              : 'bg-white border-slate-300 text-slate-800 hover:bg-slate-50'
+                          onClick={() => toggleCategoryCollapse(category)}
+                          className={`w-full flex items-center justify-between text-[11px] font-mono font-bold uppercase tracking-wider mb-1 px-1 ${
+                            darkMode ? 'text-sky-400' : 'text-sky-700'
                           }`}
                         >
-                          <div className="flex justify-between items-center">
-                            <span className="font-mono text-[11px] truncate w-40">{traceId}</span>
-                            <span
-                              className={`w-2.5 h-2.5 rounded-full ${
-                                isError ? 'bg-red-500 shadow-sm' : 'bg-emerald-500 shadow-sm'
-                              }`}
-                            />
-                          </div>
-                          <div className={`text-[10px] mt-1 flex items-center justify-between font-mono ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                            <span>{traceSpans.length} SPANS</span>
-                            <span className="font-bold">{isError ? 'FAILED' : 'SUCCESS'}</span>
-                          </div>
+                          <span>{category} ({procList.length})</span>
+                          <span>{collapsedCategories[category] ? '+' : '−'}</span>
                         </button>
-                      );
-                    })}
+
+                        {!collapsedCategories[category] && (
+                          <div className="space-y-1.5 mt-1">
+                            {procList.map((proc) => {
+                              const procId = proc.process_id || proc.processId;
+                              const isSelected = activeProcess?.processId === procId;
+                              const matchedGroup = processGroups.find((g) => g.processId === procId);
+                              const isFailed = matchedGroup?.status === 'FAILED';
+
+                              return (
+                                <button
+                                  key={procId}
+                                  onClick={() => setSelectedProcessId(procId)}
+                                  className={`text-left p-3 rounded-xl border transition-all duration-200 w-full text-xs shadow-sm ${
+                                    isSelected
+                                      ? darkMode
+                                        ? 'bg-sky-950/80 text-sky-200 border-sky-600 shadow-md'
+                                        : 'bg-sky-50 text-sky-950 border-sky-400 font-bold shadow-sm'
+                                      : darkMode
+                                      ? 'bg-slate-950/60 border-slate-800/80 text-slate-300 hover:bg-slate-800'
+                                      : 'bg-white border-slate-300 text-slate-800 hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span className="font-mono text-xs font-bold truncate w-44">{proc.process_name || proc.processName}</span>
+                                    <span
+                                      className={`w-2 h-2 rounded-full ${
+                                        isFailed ? 'bg-red-500' : 'bg-emerald-500'
+                                      }`}
+                                    />
+                                  </div>
+
+                                  <div className={`text-[10px] flex items-center justify-between font-mono mt-1 ${
+                                    darkMode ? 'text-slate-400' : 'text-slate-600'
+                                  }`}>
+                                    <span>{proc.total_steps || proc.totalSteps || 0} STEPS</span>
+                                    <span className="font-semibold">{proc.source_file}</span>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
             </div>
           </aside>
 
-          {/* Trace Forensics Main Canvas */}
-          <main className="flex-1">
+          {/* Main Forensics Flow Canvas */}
+          <main className="flex-1 min-w-0">
             <div className={`rounded-2xl p-6 shadow-sm border ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-300'}`}>
               <div className="flex items-center justify-between mb-5">
                 <div>
                   <h2 className={`text-xl font-bold font-mono uppercase ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
-                    EXECUTION FORENSICS
+                    EXECUTION FORENSICS & PROCESS DETAILS
                   </h2>
                   <p className={`text-xs font-mono mt-0.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                    ACTIVE TRACE: {selectedTraceId || 'NONE'}
+                    ACTIVE PROCESS: {activeProcess?.processName || 'NONE'} ({activeProcess?.totalSteps || 0} STEPS DISCOVERED)
                   </p>
                 </div>
-                <button
-                  onClick={handleRunSimulation}
-                  disabled={isSimulating}
-                  className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-mono font-bold tracking-wider uppercase transition-all shadow-sm"
-                >
-                  {isSimulating ? 'SIMULATING RUN...' : 'SIMULATE PIPELINE RUN'}
-                </button>
-              </div>
-
-              {/* Dynamic Pipeline Flow Steps (Chronological) */}
-              <div className="mb-6">
-                <h3 className={`text-xs uppercase tracking-wider mb-3 font-bold ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                  STEP SEQUENCE ({stepStatus.length} STEPS)
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {stepStatus.map((st, idx) => (
-                    <div
-                      key={st.id || idx}
-                      className={`p-3.5 rounded-xl border flex-1 shadow-sm transition-all ${
-                        st.status === 'ERROR'
-                          ? darkMode ? 'bg-red-950/30 border-red-800' : 'bg-red-50 border-red-300 text-red-950'
-                          : st.status === 'OK'
-                          ? darkMode ? 'bg-emerald-950/20 border-emerald-800/80' : 'bg-emerald-50 border-emerald-300 text-emerald-950'
-                          : darkMode ? 'bg-slate-800/60 border-slate-700' : 'bg-slate-50 border-slate-300'
-                      }`}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <div className={`text-xs font-bold capitalize font-mono ${darkMode ? 'text-slate-200' : 'text-slate-900'}`}>
-                            {idx + 1}. {st.name}
-                          </div>
-                          <div className={`text-[10px] font-mono font-bold mt-0.5 ${st.status === 'ERROR' ? 'text-red-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                            {st.status}
-                          </div>
-                        </div>
-                        <div className={`text-[10px] font-mono font-semibold ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                          {st.duration ? `${Math.round(st.duration)} ms` : '-'}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleRunProcessSimulation(activeProcess?.processId)}
+                    disabled={isSimulating || !activeProcess}
+                    className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-mono font-bold tracking-wider uppercase transition-all shadow-sm"
+                  >
+                    {isSimulating ? 'SIMULATING...' : 'SIMULATE THIS PROCESS'}
+                  </button>
+                  <button
+                    onClick={() => handleRunProcessSimulation(null)}
+                    disabled={isSimulating}
+                    className="px-3 py-2 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs font-mono font-bold tracking-wider uppercase transition-all shadow-sm"
+                  >
+                    RUN ALL
+                  </button>
                 </div>
               </div>
 
-              {/* Universal Spans Detail List */}
-              <div className="flex flex-col gap-4">
-                {activeSpans.map((span) => (
-                  <div
-                    key={span.span_id}
-                    className={`p-5 rounded-2xl border shadow-sm transition-all ${
-                      span.status_code === 'ERROR'
-                        ? darkMode ? 'border-red-900/60 bg-red-950/20' : 'border-red-300 bg-red-50/70'
-                        : darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-300 bg-white'
-                    }`}
-                  >
-                    <div className="flex justify-between items-center mb-4">
-                      <h3 className={`text-base font-bold font-mono ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
-                        {span.name}
-                      </h3>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleInspectInArchitecture(span.name)}
-                          className={`text-[10px] font-mono font-bold uppercase px-2.5 py-1 rounded-md border transition-colors ${
-                            darkMode ? 'bg-sky-950/80 text-sky-300 border-sky-700 hover:bg-sky-900' : 'bg-sky-50 text-sky-900 border-sky-300 hover:bg-sky-100'
-                          }`}
-                        >
-                          LOCATE IN ARCHITECTURE
-                        </button>
-                        <span
-                          className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-md border ${
-                            span.status_code === 'ERROR'
-                              ? 'bg-red-500/20 text-red-500 border-red-500/30'
-                              : darkMode ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800' : 'bg-emerald-100 text-emerald-900 border-emerald-300'
-                          }`}
-                        >
-                          {span.status_code}
-                        </span>
-                      </div>
+              {/* Selected Process Summary */}
+              {activeProcess && (
+                <div className={`p-4 rounded-xl border mb-6 flex items-center justify-between font-mono text-xs ${
+                  darkMode ? 'bg-slate-950/80 border-slate-800 text-slate-200' : 'bg-slate-50 border-slate-300 text-slate-800'
+                }`}>
+                  <div className="flex items-center gap-4">
+                    <div>
+                      <span className="text-[10px] text-slate-500 block uppercase">Process Name</span>
+                      <span className="font-bold text-sky-400">{activeProcess.processName}</span>
                     </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div>
-                        <h4 className={`text-[10px] uppercase font-bold tracking-wider mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                          Input Payload
-                        </h4>
-                        <pre className={`p-3 rounded-xl text-[11px] font-mono overflow-x-auto h-32 border ${
-                          darkMode ? 'bg-slate-950 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-300 text-slate-800'
-                        }`}>
-                          {JSON.stringify(span.attributes?.input_query || span.attributes?.input || span.attributes || {}, null, 2)}
-                        </pre>
-                      </div>
-
-                      <div>
-                        <h4 className={`text-[10px] uppercase font-bold tracking-wider mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                          Output Result
-                        </h4>
-                        <pre className={`p-3 rounded-xl text-[11px] font-mono overflow-x-auto h-32 border ${
-                          darkMode ? 'bg-slate-950 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-300 text-slate-800'
-                        }`}>
-                          {JSON.stringify(span.attributes?.output || span.attributes?.['output.context'] || span.attributes?.['output.prompt'] || span.attributes?.['output.final_response'] || {}, null, 2)}
-                        </pre>
-                      </div>
-
-                      <div>
-                        <h4 className={`text-[10px] uppercase font-bold tracking-wider mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                          Span Telemetry
-                        </h4>
-                        <div className={`text-xs space-y-1.5 p-3 rounded-xl border ${
-                          darkMode ? 'bg-slate-950 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-300 text-slate-800'
-                        }`}>
-                          <div>SPAN ID: <span className="font-mono text-[11px] text-sky-600 dark:text-sky-400">{span.span_id}</span></div>
-                          <div>PARENT ID: <span className="font-mono text-[11px]">{span.parent_span_id || 'ROOT'}</span></div>
-                          <div>LATENCY: <span className="font-mono text-[11px] text-emerald-600 dark:text-emerald-400">{span.start_time && span.end_time ? `${Math.round((span.end_time - span.start_time) / 1e6)} ms` : '—'}</span></div>
-                          {span.status_description && (
-                            <div className={`mt-2 text-[11px] font-mono p-2 rounded border ${
-                              darkMode ? 'bg-red-950/40 text-red-300 border-red-900' : 'bg-red-50 text-red-900 border-red-300'
-                            }`}>
-                              ERROR: {span.status_description}
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                    <div className="h-6 w-px bg-slate-700/50" />
+                    <div>
+                      <span className="text-[10px] text-slate-500 block uppercase">Process ID</span>
+                      <span className="font-bold">{activeProcess.processId}</span>
+                    </div>
+                    <div className="h-6 w-px bg-slate-700/50" />
+                    <div>
+                      <span className="text-[10px] text-slate-500 block uppercase">Trace Run ID</span>
+                      <span className="text-slate-400">{activeProcess.traceId}</span>
                     </div>
                   </div>
-                ))}
-              </div>
+                  <span className={`px-3 py-1 rounded-md text-[10px] font-bold border ${
+                    activeProcess.status === 'FAILED'
+                      ? 'bg-red-950/80 text-red-300 border-red-800'
+                      : 'bg-emerald-950/80 text-emerald-300 border-emerald-800'
+                  }`}>
+                    {activeProcess.status}
+                  </span>
+                </div>
+              )}
+
+              {/* Horizontal Step Sequence Flow Diagram */}
+              {activeProcess && (
+                <div className="mb-6 overflow-x-auto pb-3">
+                  <h3 className={`text-xs uppercase tracking-wider mb-3 font-bold ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                    HORIZONTAL STEP FLOW TIMELINE
+                  </h3>
+                  <div className="flex items-center gap-2 min-w-max">
+                    {activeProcess.steps.map((st, idx) => (
+                      <React.Fragment key={st.id}>
+                        <div
+                          className={`p-3 rounded-xl border shadow-sm w-48 flex-shrink-0 transition-all ${
+                            st.status === 'ERROR'
+                              ? darkMode ? 'bg-red-950/40 border-red-800' : 'bg-red-50 border-red-300 text-red-950'
+                              : darkMode ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-300'
+                          }`}
+                        >
+                          <div className="flex justify-between items-start mb-1">
+                            <span className="text-[10px] font-mono font-bold text-sky-500">STEP {st.stepNumber}</span>
+                            <span className={`text-[10px] font-mono font-bold ${st.status === 'ERROR' ? 'text-red-400' : 'text-emerald-500'}`}>
+                              {st.status}
+                            </span>
+                          </div>
+                          <div className="text-xs font-bold font-mono truncate">{st.name}</div>
+                          <div className={`text-[10px] font-mono mt-1 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                            {st.duration ? `${Math.round(st.duration)} ms` : '—'}
+                          </div>
+                        </div>
+
+                        {idx < activeProcess.steps.length - 1 && (
+                          <svg className="w-6 h-6 text-slate-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                          </svg>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Step Detail Telemetry Cards */}
+              {activeProcess && (
+                <div className="flex flex-col gap-4">
+                  {activeProcess.steps.map((st) => {
+                    const span = st.span;
+                    return (
+                      <div
+                        key={span.span_id}
+                        className={`p-5 rounded-2xl border shadow-sm transition-all ${
+                          span.status_code === 'ERROR'
+                            ? darkMode ? 'border-red-900/60 bg-red-950/20' : 'border-red-300 bg-red-50/70'
+                            : darkMode ? 'border-slate-800 bg-slate-950/60' : 'border-slate-300 bg-white'
+                        }`}
+                      >
+                        <div className="flex justify-between items-center mb-4">
+                          <h3 className={`text-base font-bold font-mono ${darkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+                            Step {st.stepNumber}: {span.name}
+                          </h3>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleInspectInArchitecture(st.sourceFile)}
+                              className={`text-[10px] font-mono font-bold uppercase px-2.5 py-1 rounded-md border transition-colors ${
+                                darkMode ? 'bg-sky-950/80 text-sky-300 border-sky-700 hover:bg-sky-900' : 'bg-sky-50 text-sky-900 border-sky-300 hover:bg-sky-100'
+                              }`}
+                            >
+                              LOCATE IN ARCHITECTURE
+                            </button>
+                            <span
+                              className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-md border ${
+                                span.status_code === 'ERROR'
+                                  ? 'bg-red-500/20 text-red-500 border-red-500/30'
+                                  : darkMode ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800' : 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                              }`}
+                            >
+                              {span.status_code}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div>
+                            <h4 className={`text-[10px] uppercase font-bold tracking-wider mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                              Input Payload
+                            </h4>
+                            <pre className={`p-3 rounded-xl text-[11px] font-mono overflow-x-auto h-28 border ${
+                              darkMode ? 'bg-slate-950 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-300 text-slate-800'
+                            }`}>
+                              {JSON.stringify(st.attributes?.input || {}, null, 2)}
+                            </pre>
+                          </div>
+
+                          <div>
+                            <h4 className={`text-[10px] uppercase font-bold tracking-wider mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                              Output Result
+                            </h4>
+                            <pre className={`p-3 rounded-xl text-[11px] font-mono overflow-x-auto h-28 border ${
+                              darkMode ? 'bg-slate-950 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-300 text-slate-800'
+                            }`}>
+                              {JSON.stringify(st.attributes?.output || {}, null, 2)}
+                            </pre>
+                          </div>
+
+                          <div>
+                            <h4 className={`text-[10px] uppercase font-bold tracking-wider mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                              Telemetry Specs
+                            </h4>
+                            <div className={`text-xs space-y-1 p-3 rounded-xl border ${
+                              darkMode ? 'bg-slate-950 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-300 text-slate-800'
+                            }`}>
+                              <div>SOURCE: <span className="font-mono text-sky-400">{st.sourceFile}</span></div>
+                              <div>LATENCY: <span className="font-mono text-emerald-400">{st.duration ? `${Math.round(st.duration)} ms` : '—'}</span></div>
+                              {span.status_description && (
+                                <div className="mt-2 text-[10px] font-mono text-red-400 border border-red-900 p-1.5 rounded bg-red-950/30">
+                                  {span.status_description}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </main>
         </div>
